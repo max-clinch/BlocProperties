@@ -1,9 +1,8 @@
 import _test, { TestFn } from 'ava';
-import { findAll } from 'solidity-ast/utils';
+import { findAll, astDereferencer } from 'solidity-ast/utils';
 import { artifacts } from 'hardhat';
 
 import { SolcOutput } from './solc-api';
-import { astDereferencer } from './ast-dereferencer';
 import { getStorageUpgradeErrors } from './storage';
 import { extractStorageLayout } from './storage/extract';
 import { BuildInfo } from 'hardhat/types';
@@ -111,4 +110,36 @@ test('user defined value types - no layout info - bad underlying type', async t 
 test('renamed retyped - extraction', async t => {
   const layout = await t.context.extractStorageLayout('StorageRenamedRetyped');
   t.snapshot(stabilizeStorageLayout(layout));
+});
+
+test('mapping with user defined value type key - ok', async t => {
+  const v1 = await t.context.extractStorageLayout('Storage089_MappingUVDTKey_V1');
+  const v2 = await t.context.extractStorageLayout('Storage089_MappingUVDTKey_V2_Ok');
+  const comparison = getStorageUpgradeErrors(v1, v2);
+  t.deepEqual(comparison, []);
+});
+
+test('mapping with user defined value type key - bad', async t => {
+  const v1 = await t.context.extractStorageLayout('Storage089_MappingUVDTKey_V1');
+  const v2 = await t.context.extractStorageLayout('Storage089_MappingUVDTKey_V2_Bad');
+  const comparison = getStorageUpgradeErrors(v1, v2);
+  t.like(comparison, {
+    length: 2,
+    0: {
+      kind: 'typechange',
+      change: {
+        kind: 'mapping key',
+      },
+      original: { label: 'm1' },
+      updated: { label: 'm1' },
+    },
+    1: {
+      kind: 'typechange',
+      change: {
+        kind: 'mapping key',
+      },
+      original: { label: 'm2' },
+      updated: { label: 'm2' },
+    },
+  });
 });

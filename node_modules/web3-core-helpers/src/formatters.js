@@ -71,7 +71,7 @@ var outputBigNumberFormatter = function (number) {
 };
 
 /**
- * Returns true if the given blockNumber is 'latest', 'pending', or 'earliest.
+ * Returns true if the given blockNumber is 'latest', 'pending', 'earliest, 'finalized' or 'safe'
  *
  * @method isPredefinedBlockNumber
  *
@@ -80,7 +80,7 @@ var outputBigNumberFormatter = function (number) {
  * @returns {Boolean}
  */
 var isPredefinedBlockNumber = function (blockNumber) {
-    return blockNumber === 'latest' || blockNumber === 'pending' || blockNumber === 'earliest';
+    return ['latest','pending','earliest','finalized','safe'].includes(blockNumber);
 };
 
 /**
@@ -101,7 +101,7 @@ var inputDefaultBlockNumberFormatter = function (blockNumber) {
 };
 
 /**
- * Returns the given block number as hex string or the predefined block number 'latest', 'pending', 'earliest', 'genesis'
+ * Returns the given block number as hex string or the predefined block number 'latest', 'pending', 'earliest', 'finalized', 'safe', 'genesis'
  *
  * @param {String|Number|BN|BigNumber} blockNumber
  *
@@ -162,7 +162,7 @@ var _txInputFormatter = function (options) {
         delete options.gasPrice;
     }
 
-    ['gasPrice', 'gas', 'value', 'maxPriorityFeePerGas', 'maxFeePerGas', 'nonce'].filter(function (key) {
+    ['gasPrice', 'gas', 'value', 'maxPriorityFeePerGas', 'maxFeePerGas', 'nonce', 'type'].filter(function (key) {
         return options[key] !== undefined;
     }).forEach(function (key) {
         options[key] = utils.numberToHex(options[key]);
@@ -235,21 +235,23 @@ var inputSignFormatter = function (data) {
  * @param {Object} tx
  * @returns {Object}
  */
-var outputTransactionFormatter = function (tx) {
-    if (tx.blockNumber !== null)
-        tx.blockNumber = utils.hexToNumber(tx.blockNumber);
-    if (tx.transactionIndex !== null)
-        tx.transactionIndex = utils.hexToNumber(tx.transactionIndex);
-    tx.nonce = utils.hexToNumber(tx.nonce);
-    tx.gas = utils.hexToNumber(tx.gas);
+var outputTransactionFormatter = function (tx, hexFormat) {
+    if (!hexFormat) {
+        if (tx.blockNumber !== null)
+            tx.blockNumber = utils.hexToNumber(tx.blockNumber);
+        if (tx.transactionIndex !== null)
+            tx.transactionIndex = utils.hexToNumber(tx.transactionIndex);
+        tx.nonce = utils.hexToNumber(tx.nonce);
+        tx.gas = utils.hexToNumber(tx.gas);
+        if (tx.type)
+            tx.type = utils.hexToNumber(tx.type);
+    }
     if (tx.gasPrice)
         tx.gasPrice = outputBigNumberFormatter(tx.gasPrice);
     if (tx.maxFeePerGas)
         tx.maxFeePerGas = outputBigNumberFormatter(tx.maxFeePerGas);
     if (tx.maxPriorityFeePerGas)
         tx.maxPriorityFeePerGas = outputBigNumberFormatter(tx.maxPriorityFeePerGas);
-    if (tx.type)
-        tx.type = utils.hexToNumber(tx.type);
     tx.value = outputBigNumberFormatter(tx.value);
 
     if (tx.to && utils.isAddress(tx.to)) { // tx.to could be `0x0` or `null` while contract creation
@@ -277,20 +279,21 @@ var outputTransactionReceiptFormatter = function (receipt) {
         throw new Error('Received receipt is invalid: ' + receipt);
     }
 
-    if (receipt.blockNumber !== null)
-        receipt.blockNumber = utils.hexToNumber(receipt.blockNumber);
-    if (receipt.transactionIndex !== null)
-        receipt.transactionIndex = utils.hexToNumber(receipt.transactionIndex);
-    receipt.cumulativeGasUsed = utils.hexToNumber(receipt.cumulativeGasUsed);
-    receipt.gasUsed = utils.hexToNumber(receipt.gasUsed);
-
+    if(!this.hexFormat){
+        if (receipt.blockNumber !== null)
+            receipt.blockNumber = utils.hexToNumber(receipt.blockNumber);
+        if (receipt.transactionIndex !== null)
+            receipt.transactionIndex = utils.hexToNumber(receipt.transactionIndex);
+        receipt.cumulativeGasUsed = utils.hexToNumber(receipt.cumulativeGasUsed);
+        receipt.gasUsed = utils.hexToNumber(receipt.gasUsed);
+        if (receipt.effectiveGasPrice) {
+            receipt.effectiveGasPrice = utils.hexToNumber(receipt.effectiveGasPrice)
+        }
+    }
     if (Array.isArray(receipt.logs)) {
         receipt.logs = receipt.logs.map(outputLogFormatter);
     }
 
-    if (receipt.effectiveGasPrice) {
-        receipt.effectiveGasPrice = utils.hexToNumber(receipt.effectiveGasPrice)
-    }
     if (receipt.contractAddress) {
         receipt.contractAddress = utils.toChecksumAddress(receipt.contractAddress);
     }
@@ -309,15 +312,17 @@ var outputTransactionReceiptFormatter = function (receipt) {
  * @param {Object} block
  * @returns {Object}
  */
-var outputBlockFormatter = function (block) {
+var outputBlockFormatter = function (block, hexFormat) {
 
-    // transform to number
-    block.gasLimit = utils.hexToNumber(block.gasLimit);
-    block.gasUsed = utils.hexToNumber(block.gasUsed);
-    block.size = utils.hexToNumber(block.size);
-    block.timestamp = utils.hexToNumber(block.timestamp);
-    if (block.number !== null)
-        block.number = utils.hexToNumber(block.number);
+    if (!hexFormat) {
+        // transform to number
+        block.gasLimit = utils.hexToNumber(block.gasLimit);
+        block.gasUsed = utils.hexToNumber(block.gasUsed);
+        block.size = utils.hexToNumber(block.size);
+        block.timestamp = utils.hexToNumber(block.timestamp);
+        if (block.number !== null)
+            block.number = utils.hexToNumber(block.number);
+    }
 
     if (block.difficulty)
         block.difficulty = outputBigNumberFormatter(block.difficulty);
@@ -327,7 +332,7 @@ var outputBlockFormatter = function (block) {
     if (Array.isArray(block.transactions)) {
         block.transactions.forEach(function (item) {
             if (!(typeof item === 'string'))
-                return outputTransactionFormatter(item);
+                return outputTransactionFormatter(item, hexFormat);
         });
     }
 

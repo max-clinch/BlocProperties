@@ -1,29 +1,49 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.0;
+pragma solidity ^0.8.18;
 
-import '../node_modules/openzeppelin-solidity/contracts/token/ERC721/ERC721.sol';
-import '../node_modules/openzeppelin-solidity/contracts/ownership/Ownable.sol';
-import './BlocAuction.sol';
+import '@openzeppelin/contracts/token/ERC721/ERC721.sol';
+import '@openzeppelin/contracts/access/Ownable.sol';
+import '@openzeppelin/contracts/utils/Counters.sol';
+import '@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol';
 
-contract BlocMarket is ERC721, Ownable {
 
-    constructor() ERC721Full("BlocMarket", "DEAL") public {}
+contract BlocMarket is ERC721URIStorage, Ownable(msg.sender) {
 
     using Counters for Counters.Counter;
 
-    Counters.Counter token_ids;
+    Counters.Counter private token_ids;
 
-    address  foundation_address = msg.sender;
+    address payable public foundation_address;
 
-    mapping(uint => DealerlessAuction) public auctions;
+    mapping(uint => Auction) public auctions;
+    mapping(uint256 => address) private _owners;
 
-    modifier landRegistered(uint token_id) {
-        require(_exists(token_id), "Land not registered!");
-        _;
+
+    enum AuctionStatus { NotStarted, Open, Ended }
+
+    struct Auction {
+        address payable highestBidder;
+        uint highestBid;
+        AuctionStatus status;
     }
 
-    function createAuction(uint token_id) public onlyOwner {
-        auctions[token_id] = new DealerlessAuction(foundation_address);
+    modifier landRegistered(uint token_id) {
+    require(_exists(token_id), "Land not registered!");
+    _;
+}
+
+
+    constructor() ERC721("BlocMarket", "DEAL") {
+        foundation_address = payable(msg.sender);
+    }
+
+    function _exists(uint256 tokenId) internal view virtual returns (bool) {
+    return _owners[tokenId] != address(0);
+}
+
+    function createAuction(uint token_id) public onlyOwner landRegistered(token_id) {
+        require(auctions[token_id].status == AuctionStatus.NotStarted, "Auction already started");
+        auctions[token_id].status = AuctionStatus.Open;
     }
 
     function registerLand(string memory uri) public payable onlyOwner {
@@ -35,29 +55,37 @@ contract BlocMarket is ERC721, Ownable {
     }
 
     function endAuction(uint token_id) public onlyOwner landRegistered(token_id) {
-        DealerlessAuction auction = auctions[token_id];
-        auction.auctionEnd();
-        safeTransferFrom(owner(), auction.highestBidder(), token_id);
+        Auction storage auction = auctions[token_id];
+        require(auction.status == AuctionStatus.Open, "Auction not open");
+
+        auction.status = AuctionStatus.Ended;
+        safeTransferFrom(owner(), auction.highestBidder, token_id);
     }
 
     function auctionEnded(uint token_id) public view landRegistered(token_id) returns(bool) {
-        DealerlessAuction auction = auctions[token_id];
-        return auction.ended();
+        return auctions[token_id].status == AuctionStatus.Ended;
     }
 
     function highestBid(uint token_id) public view landRegistered(token_id) returns(uint) {
-        DealerlessAuction auction = auctions[token_id];
-        return auction.highestBid();
+        return auctions[token_id].highestBid;
     }
 
     function pendingReturn(uint token_id, address sender) public view landRegistered(token_id) returns(uint) {
-        DealerlessAuction auction = auctions[token_id];
-        return auction.pendingReturn(sender);
+        Auction storage auction = auctions[token_id];
+        return sender == auction.highestBidder ? 0 : auction.highestBid;
     }
 
     function bid(uint token_id) public payable landRegistered(token_id) {
-        DealerlessAuction auction = auctions[token_id];
-        auction.bid.value(msg.value)(msg.sender);
-    }
+        Auction storage auction = auctions[token_id];
+        require(auction.status == AuctionStatus.Open, "Auction not open");
+        require(msg.value > auction.highestBid, "Bid amount is too low");
 
+        if (auction.highestBidder != address(0)) {
+            // Refund the previous highest bidder
+            payable(auction.highestBidder).transfer(auction.highestBid);
+        }
+
+        auction.highestBidder = payable(msg.sender);
+        auction.highestBid = msg.value;
+    }
 }

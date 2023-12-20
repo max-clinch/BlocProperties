@@ -68,12 +68,12 @@ export class Contract {
     getPastEvents(
         event: string,
         options: PastEventOptions,
-        callback: (error: Error, event: EventData) => void
+        callback: (error: Error, events: EventData[]) => void
     ): Promise<EventData[]>;
     getPastEvents(event: string, options: PastEventOptions): Promise<EventData[]>;
     getPastEvents(
         event: string,
-        callback: (error: Error, event: EventData) => void
+        callback: (error: Error, events: EventData[]) => void
     ): Promise<EventData[]>;
 }
 
@@ -177,3 +177,5 @@ export interface EventData {
     blockNumber: number;
     address: string;
 }
+
+export default Contract

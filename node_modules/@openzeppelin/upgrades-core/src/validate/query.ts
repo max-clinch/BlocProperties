@@ -1,13 +1,14 @@
 import { Version, getVersion } from '../version';
-import { ValidationRunData, ValidationError } from './run';
+import { ValidationRunData, ValidationError, isOpcodeError, ContractValidation } from './run';
 import { StorageLayout } from '../storage/layout';
 import { unlinkBytecode } from '../link-refs';
 import { ValidationOptions, processExceptions } from './overrides';
-import { ValidationErrors } from './error';
+import { ContractSourceNotFoundError, ValidationErrors } from './error';
 import { ValidationData, normalizeValidationData } from './data';
 import { ProxyDeployment } from '../manifest';
 
 const upgradeToSignature = 'upgradeTo(address)';
+const upgradeToAndCallSignature = 'upgradeToAndCall(address,bytes)';
 
 export function assertUpgradeSafe(data: ValidationData, version: Version, opts: ValidationOptions): void {
   const dataV3 = normalizeValidationData(data);
@@ -72,7 +73,7 @@ export function getContractNameAndRunValidation(data: ValidationData, version: V
   }
 
   if (fullContractName === undefined || runValidation === undefined) {
-    throw new Error('The requested contract was not found. Make sure the source code is available for compilation');
+    throw new ContractSourceNotFoundError();
   }
 
   return [fullContractName, runValidation];
@@ -92,9 +93,11 @@ export function unfoldStorageLayout(runData: ValidationRunData, fullContractName
       solcVersion,
       storage: c.layout.storage,
       types: c.layout.types,
+      namespaces: c.layout.namespaces,
     };
   } else {
-    const layout: StorageLayout = { solcVersion, storage: [], types: {} };
+    // Namespaces are pre-flattened
+    const layout: StorageLayout = { solcVersion, storage: [], types: {}, namespaces: c.layout.namespaces };
     for (const name of [fullContractName].concat(c.inherit)) {
       layout.storage.unshift(...runData[name].layout.storage);
       Object.assign(layout.types, runData[name].layout.types);
@@ -143,13 +146,14 @@ export function getErrors(data: ValidationData, version: Version, opts: Validati
   const [fullContractName, runValidation] = getContractNameAndRunValidation(dataV3, version);
   const c = runValidation[fullContractName];
 
-  const errors = getUsedContractsAndLibraries(fullContractName, runValidation).flatMap(
-    name => runValidation[name].errors,
-  );
+  const errors = getAllErrors(runValidation, fullContractName);
 
   const selfAndInheritedMethods = getAllMethods(runValidation, fullContractName);
 
-  if (!selfAndInheritedMethods.includes(upgradeToSignature)) {
+  if (
+    !selfAndInheritedMethods.includes(upgradeToSignature) &&
+    !selfAndInheritedMethods.includes(upgradeToAndCallSignature)
+  ) {
     errors.push({
       src: c.src,
       kind: 'missing-public-upgradeto',
@@ -159,21 +163,27 @@ export function getErrors(data: ValidationData, version: Version, opts: Validati
   return processExceptions(fullContractName, errors, opts);
 }
 
+function getAllErrors(runValidation: ValidationRunData, fullContractName: string) {
+  // add self's opcode errors only, since opcode errors already include parents
+  const opcodeErrors = runValidation[fullContractName].errors.filter(error => isOpcodeError(error));
+
+  // add other errors from self and inherited contracts
+  const otherErrors = getUsedContracts(fullContractName, runValidation)
+    .flatMap(name => runValidation[name].errors)
+    .filter(error => !isOpcodeError(error));
+
+  return [...opcodeErrors, ...otherErrors];
+}
+
 function getAllMethods(runValidation: ValidationRunData, fullContractName: string): string[] {
   const c = runValidation[fullContractName];
   return c.methods.concat(...c.inherit.map(name => runValidation[name].methods));
 }
 
-function getUsedContractsAndLibraries(contractName: string, runValidation: ValidationRunData) {
+function getUsedContracts(contractName: string, runValidation: ValidationRunData) {
   const c = runValidation[contractName];
   // Add current contract and all of its parents
   const res = new Set([contractName, ...c.inherit]);
-  // Add used libraries transitively until no more are found
-  for (const c1 of res) {
-    for (const c2 of runValidation[c1].libraries) {
-      res.add(c2);
-    }
-  }
   return Array.from(res);
 }
 
@@ -182,13 +192,26 @@ export function isUpgradeSafe(data: ValidationData, version: Version): boolean {
   return getErrors(dataV3, version).length == 0;
 }
 
+export function inferUUPS(runValidation: ValidationRunData, fullContractName: string): boolean {
+  const methods = getAllMethods(runValidation, fullContractName);
+  return methods.includes(upgradeToSignature) || methods.includes(upgradeToAndCallSignature);
+}
+
 export function inferProxyKind(data: ValidationData, version: Version): ProxyDeployment['kind'] {
   const dataV3 = normalizeValidationData(data);
   const [fullContractName, runValidation] = getContractNameAndRunValidation(dataV3, version);
-  const methods = getAllMethods(runValidation, fullContractName);
-  if (methods.includes(upgradeToSignature)) {
+  if (inferUUPS(runValidation, fullContractName)) {
     return 'uups';
   } else {
     return 'transparent';
   }
+}
+
+/**
+ * Whether the contract inherits any contract named "Initializable"
+ * @param contractValidation The validation result for the contract
+ * @return true if the contract inheritss any contract whose fully qualified name ends with ":Initializable"
+ */
+export function inferInitializable(contractValidation: ContractValidation) {
+  return contractValidation.inherit.some(c => c.endsWith(':Initializable'));
 }
